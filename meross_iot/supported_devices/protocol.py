@@ -13,7 +13,7 @@ from retrying import retry
 import paho.mqtt.client as mqtt
 from paho.mqtt import MQTTException
 
-from meross_iot.supported_devices.timeouts import SHORT_TIMEOUT
+from meross_iot.supported_devices.timeouts import SHORT_TIMEOUT, LONG_TIMEOUT
 from meross_iot.supported_devices.client_status import ClientStatus
 from meross_iot.supported_devices.connection import ConnectionManager
 from meross_iot.supported_devices.exceptions.CommandTimeoutException import CommandTimeoutException
@@ -25,9 +25,9 @@ import uuid
 
 l = logging.getLogger("meross_protocol")
 h = StreamHandler(stream=sys.stdout)
-h.setLevel(logging.DEBUG)
+h.setLevel(logging.INFO)
 l.addHandler(h)
-l.setLevel(logging.INFO)
+l.setLevel(logging.DEBUG)
 
 
 # Call this module to adjust the verbosity of the stream output. By default, only INFO is written to STDOUT log.
@@ -74,6 +74,8 @@ class AbstractMerossDevice(ABC):
     _waiting_message_ack_condition = None
     _waiting_message_id = None
 
+    _sent_command_condition = None
+        
     _ack_response = None
     _error = None
 
@@ -87,6 +89,7 @@ class AbstractMerossDevice(ABC):
                  **kwords):
         self._connection_manager = ConnectionManager()
         self._waiting_message_ack_condition = Condition()
+        self._sent_command_condition = Condition()
         self._subscription_count = AtomicCounter(0)
 
         self._token = token
@@ -99,6 +102,10 @@ class AbstractMerossDevice(ABC):
             self._domain = "eu-iot.meross.com"
         if "channels" in kwords:
             self._channels = kwords['channels']
+        else: 
+            self._channels = None        
+
+        print("Domain: {}".format(self._domain))
 
         # Informations about device
         if "devName" in kwords:
@@ -135,10 +142,12 @@ class AbstractMerossDevice(ABC):
         if self._user_id is not None:
             self._mqtt_client.username_pw_set(username=self._user_id,
                                               password=hashed_password)
-        self._mqtt_client.tls_set(ca_certs=self._ca_cert, certfile=None,
-                                  keyfile=None, cert_reqs=ssl.CERT_REQUIRED,
-                                  tls_version=ssl.PROTOCOL_TLS,
-                                  ciphers=None)
+       # self._mqtt_client.tls_set(ca_certs=self._ca_cert, certfile=None,
+       #                           keyfile=None, cert_reqs=ssl.CERT_REQUIRED,
+       #                           tls_version=ssl.PROTOCOL_TLS,
+       #                           ciphers=None)
+        self._mqtt_client.tls_set(self._ca_cert, cert_reqs=ssl.CERT_NONE)
+        self._mqtt_client.tls_insecure_set(True)
 
     @retry(wait_exponential_multiplier=1000, wait_exponential_max=10000, stop_max_attempt_number=5)
     def _ensure_connected(self):
@@ -250,6 +259,7 @@ class AbstractMerossDevice(ABC):
                 if header['messageId'] == self._waiting_message_id:
                     self._ack_response = message
                     self._waiting_message_ack_condition.notify()
+                    return
 
             # If the current client was not waiting for the received message, check if it's still something
             # we should process (i.e. an update from another client). If so, process it accordingly.
@@ -280,19 +290,24 @@ class AbstractMerossDevice(ABC):
     @retry(wait_exponential_multiplier=1000, wait_exponential_max=10000, stop_max_attempt_number=3)
     def _execute_cmd(self, method, namespace, payload, timeout=SHORT_TIMEOUT):
 
+        with self._sent_command_condition:
+            self._sent_command_condition.acquire()
+                
         # Wait the client to be in a valid state before issuing a command
         self._ensure_connected()
 
         # Execute the command and retrieve the message-id
         self._waiting_message_id = self._mqtt_message(method, namespace, payload)
-
+ 
         # Let's now wait synchronously until we get back the ACK for that command
         with self._waiting_message_ack_condition:
             if not self._waiting_message_ack_condition.wait(timeout=timeout):
                 # Timeout expired. Give up waiting for that message_id.
+                self._sent_command_condition.release()
                 self._waiting_message_id = None
                 raise CommandTimeoutException("A timeout occurred while waiting fot the ACK.")
 
+        self._sent_command_condition.release()
         # Check for disconnections. In case the connection drops while we are waiting for an ACK,
         # the previous block of code won't throw any exception. In fact, it will just return. It is our
         # duty, at this stage, to make sure that the connection is still healthy.
@@ -388,4 +403,3 @@ class AbstractMerossDevice(ABC):
 
     def get_report(self):
         return self._execute_cmd("GET", "Appliance.System.Report", {})
-

@@ -63,11 +63,17 @@ class GenericBulb(AbstractMerossDevice):
 
     def _toggle(self, status):
         payload = {"channel": 0, "toggle": {"onoff": status}}
-        return self._execute_cmd("SET", TOGGLE, payload)
+        message = self._execute_cmd('SET', TOGGLE, payload)
+        #The above will block until an ACK is received at which point we know it worked
+        self._update_state(0, onoff=status)
+        return message
 
     def _togglex(self, channel, status):
         payload = {'togglex': {"onoff": status, "channel": channel}}
-        return self._execute_cmd("SET", TOGGLEX, payload)
+        message = self._execute_cmd('SET', TOGGLEX, payload)
+        #The above will block until an ACK is received at which point we know it worked
+        self._update_state(channel, onoff=status)
+        return message
 
     def _handle_namespace_payload(self, namespace, payload):
         if namespace == TOGGLE:
@@ -87,7 +93,9 @@ class GenericBulb(AbstractMerossDevice):
 
         elif namespace == LIGHT:
             c = payload['light']['channel']
-            self._update_state(channel=c, kwargs=payload['light'])
+            newstate = payload['light']
+            del newstate['channel']
+            self._update_state(channel=c, **newstate)
 
         else:
             l.error("Unknown/Unsupported namespace/command: %s" % namespace)
@@ -107,7 +115,8 @@ class GenericBulb(AbstractMerossDevice):
 
     def _get_channel_id(self, channel):
         # Otherwise, if the passed channel looks like the channel spec, lookup its array indexindex
-        if channel in self._channels:
+        if self._channels != None:
+          if channel in self._channels:
             return self._channels.index(channel)
 
         # if a channel name is given, lookup the channel id from the name
@@ -192,13 +201,14 @@ class GenericBulb(AbstractMerossDevice):
             'light': {
                 'capacity': capacity,
                 'channel': ch_id,
-                'gradual': 0,
-                'luminance': luminance,
                 'rgb': color,
-                'temperature': temperature
+                'temperature': temperature,
+                'luminance': luminance
             }
         }
-        self._execute_cmd(method='SET', namespace=LIGHT, payload=payload)
+        
+        message = self._execute_cmd(method='SET', namespace=LIGHT, payload=payload)
+        self._handle_namespace_payload(LIGHT, message)
 
     def get_light_color(self, channel=0):
         ch_id = self._get_channel_id(channel)

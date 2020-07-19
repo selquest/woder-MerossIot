@@ -10,3 +10,8 @@ WIFI_LIST = 'Appliance.Config.WifiList'
 
 # Light Abilities
 LIGHT = 'Appliance.Control.Light'
+
+
+#Humidifier abilities
+SPRAY = 'Appliance.Control.Spray'
+DND = 'Appliance.System.DNDMode'

@@ -67,8 +67,9 @@ class GenericPlug(AbstractMerossDevice):
 
     def _get_channel_id(self, channel):
         # Otherwise, if the passed channel looks like the channel spec, lookup its array indexindex
-        if channel in self._channels:
-            return self._channels.index(channel)
+        if self._channels is not None:
+            if channel in self._channels:
+                return self._channels.index(channel)
 
         # if a channel name is given, lookup the channel id from the name
         if isinstance(channel, str):
