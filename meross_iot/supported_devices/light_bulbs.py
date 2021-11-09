@@ -1,9 +1,11 @@
 from threading import RLock
+import logging
 
 from meross_iot.supported_devices.abilities import *
 from meross_iot.supported_devices.timeouts import SHORT_TIMEOUT, LONG_TIMEOUT
 from meross_iot.supported_devices.protocol import AbstractMerossDevice, l
 
+l = logging.getLogger("meross_protocol")
 
 def to_rgb(rgb):
     if rgb is None:
@@ -92,10 +94,13 @@ class GenericBulb(AbstractMerossDevice):
                 self._update_state(channel=channel_index, on=on_status)
 
         elif namespace == LIGHT:
-            c = payload['light']['channel']
-            newstate = payload['light']
-            del newstate['channel']
-            self._update_state(channel=c, **newstate)
+            if 'light' in payload:
+                c = payload['light']['channel']
+                newstate = payload['light']
+                del newstate['channel']
+                self._update_state(channel=c, **newstate)
+            else:
+                l.warn("_handle_namespace_payload: light not found in payload?")
 
         else:
             l.error("Unknown/Unsupported namespace/command: %s" % namespace)
@@ -208,7 +213,11 @@ class GenericBulb(AbstractMerossDevice):
         }
         
         message = self._execute_cmd(method='SET', namespace=LIGHT, payload=payload)
-        self._handle_namespace_payload(LIGHT, message)
+        # the SETACK for Appliance.Control.Light no longer carries a payload (at least for the MPD100 dimmer), so manage state differently
+        newstate = payload['light']
+        del newstate['channel']
+        self._update_state(ch_id, **newstate)
+        #self._handle_namespace_payload(LIGHT, message)
 
     def get_light_color(self, channel=0):
         ch_id = self._get_channel_id(channel)
